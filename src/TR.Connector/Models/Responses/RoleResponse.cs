@@ -7,11 +7,7 @@
         public string corporatePhoneNumber { get; set; }
     }
 
-    internal class RoleResponse
+    internal class RoleResponse : BaseApiResponse<List<RoleResponseData>>
     {
-        public List<RoleResponseData> data { get; set; }
-        public bool success { get; set; }
-        public object errorText { get; set; }
-        public int count { get; set; }
     }
 }

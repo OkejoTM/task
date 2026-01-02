@@ -6,11 +6,7 @@
         public int expires_in { get; set; }
     }
 
-    internal class TokenResponse
+    internal class TokenResponse : BaseApiResponse<TokenResponseData>
     {
-        public TokenResponseData data { get; set; }
-        public bool success { get; set; }
-        public object errorText { get; set; }
-        public object count { get; set; }
     }
 }

@@ -1,4 +1,5 @@
-﻿using TR.Connectors.Api.Entities;
+﻿using TR.Connector.Exceptions;
+using TR.Connectors.Api.Entities;
 using TR.Connectors.Api.Interfaces;
 using TR.Connector.Interfaces;
 using TR.Connector.Models.Responses;
@@ -32,16 +33,25 @@ namespace TR.Connector
 
             _apiClient = new ApiClient(_url);
 
-            var body = new { login = _login, password = _password };
-            var tokenResponse = await _apiClient.PostAsync<TokenResponse>(
-                Constants.ApiLogin, 
-                body, 
-                cancellationToken);
+            try
+            {
+                var body = new { login = _login, password = _password };
+                var tokenResponse = await _apiClient.PostAsync<TokenResponse>(
+                    Constants.ApiLogin,
+                    body,
+                    cancellationToken);
 
-            if (tokenResponse?.data?.access_token == null)
-                throw new InvalidOperationException("Failed to obtain access token");
+                if (tokenResponse.data?.access_token == null)
+                    throw new InvalidOperationException("Failed to obtain access token");
 
-            _apiClient.SetBearerToken(tokenResponse.data.access_token);
+                _apiClient.SetBearerToken(tokenResponse.data.access_token);
+                Logger?.Debug("Authentication successful");
+            }
+            catch (ApiException ex)
+            {
+                Logger?.Error($"Authentication failed: {ex.ErrorText}");
+                throw;
+            }
         }
 
         private void ParseConnectionString(string connectionString)
@@ -82,107 +92,174 @@ namespace TR.Connector
         {
             EnsureInitialized();
 
-            var itRoleResponse = await _apiClient.GetAsync<RoleResponse>(
-                Constants.ApiRolesAll, 
-                cancellationToken);
-            
-            var itRolePermissions = itRoleResponse.data.Select(role =>
-                new Permission(
-                    $"{Constants.PermissionTypeItRole},{role.id}",
-                    role.name,
-                    role.corporatePhoneNumber));
-
-            var rightResponse = await _apiClient.GetAsync<RoleResponse>(
-                Constants.ApiRightsAll, 
-                cancellationToken);
-            
-            var rightPermissions = rightResponse.data.Select(right =>
-                new Permission(
-                    $"{Constants.PermissionTypeRequestRight},{right.id}",
-                    right.name,
-                    right.corporatePhoneNumber));
-
-            return itRolePermissions.Concat(rightPermissions);
-        }
-
-        public async Task<IEnumerable<string>> GetUserPermissionsAsync(string userLogin, CancellationToken cancellationToken = default)
-        {
-            EnsureInitialized();
-            ValidateUserLogin(userLogin);
-
-            var itRoleResponse = await _apiClient.GetAsync<UserRoleResponse>(
-                string.Format(Constants.ApiUserRoles, userLogin),
-                cancellationToken);
-            
-            var roles = itRoleResponse.data.Select(role => 
-                $"{Constants.PermissionTypeItRole},{role.id}");
-
-            var rightResponse = await _apiClient.GetAsync<UserRoleResponse>(
-                string.Format(Constants.ApiUserRights, userLogin),
-                cancellationToken);
-            
-            var rights = rightResponse.data.Select(right => 
-                $"{Constants.PermissionTypeRequestRight},{right.id}");
-
-            return roles.Concat(rights).ToList();
-        }
-
-        public async Task AddUserPermissionsAsync(string userLogin, IEnumerable<string> rightIds, CancellationToken cancellationToken = default)
-        {
-            EnsureInitialized();
-            ValidateUserLogin(userLogin);
-
-            if (rightIds == null || !rightIds.Any())
-                return;
-
-            if (!await CanModifyUserAsync(userLogin, cancellationToken))
-                return;
-
-            foreach (var rightId in rightIds)
+            try
             {
-                await ModifyUserPermissionAsync(userLogin, rightId, isAdding: true, cancellationToken);
+                var itRoleResponse = await _apiClient.GetAsync<RoleResponse>(
+                    Constants.ApiRolesAll,
+                    cancellationToken);
+
+                var itRolePermissions = (itRoleResponse.data ?? new List<RoleResponseData>())
+                    .Select(role => new Permission(
+                        $"{Constants.PermissionTypeItRole},{role.id}",
+                        role.name,
+                        role.corporatePhoneNumber));
+
+                var rightResponse = await _apiClient.GetAsync<RoleResponse>(
+                    Constants.ApiRightsAll,
+                    cancellationToken);
+
+                var rightPermissions = (rightResponse.data ?? new List<RoleResponseData>())
+                    .Select(right => new Permission(
+                        $"{Constants.PermissionTypeRequestRight},{right.id}",
+                        right.name,
+                        right.corporatePhoneNumber));
+
+                var result = itRolePermissions.Concat(rightPermissions).ToList();
+                Logger?.Debug($"Retrieved {result.Count} permissions");
+
+                return result;
+            }
+            catch (ApiException ex)
+            {
+                Logger?.Error($"Failed to get all permissions: {ex.ErrorText}");
+                throw;
             }
         }
 
-        public async Task RemoveUserPermissionsAsync(string userLogin, IEnumerable<string> rightIds, CancellationToken cancellationToken = default)
+        public async Task<IEnumerable<string>> GetUserPermissionsAsync(string userLogin,
+            CancellationToken cancellationToken = default)
+        {
+            EnsureInitialized();
+            ValidateUserLogin(userLogin);
+
+            try
+            {
+                var itRoleResponse = await _apiClient.GetAsync<UserRoleResponse>(
+                    string.Format(Constants.ApiUserRoles, userLogin),
+                    cancellationToken);
+
+                var roles = (itRoleResponse.data ?? new List<RoleResponseData>())
+                    .Select(role => $"{Constants.PermissionTypeItRole},{role.id}");
+
+                var rightResponse = await _apiClient.GetAsync<UserRoleResponse>(
+                    string.Format(Constants.ApiUserRights, userLogin),
+                    cancellationToken);
+
+                var rights = (rightResponse.data ?? new List<RoleResponseData>())
+                    .Select(right => $"{Constants.PermissionTypeRequestRight},{right.id}");
+
+                var result = roles.Concat(rights).ToList();
+                Logger?.Debug($"Retrieved {result.Count} permissions for user {userLogin}");
+
+                return result;
+            }
+            catch (ApiException ex)
+            {
+                Logger?.Error($"Failed to get permissions for user {userLogin}: {ex.ErrorText}");
+                throw;
+            }
+        }
+
+        public async Task AddUserPermissionsAsync(string userLogin, IEnumerable<string> rightIds,
+            CancellationToken cancellationToken = default)
         {
             EnsureInitialized();
             ValidateUserLogin(userLogin);
 
             if (rightIds == null || !rightIds.Any())
-                return;
-
-            if (!await CanModifyUserAsync(userLogin, cancellationToken))
-                return;
-
-            foreach (var rightId in rightIds)
             {
-                await ModifyUserPermissionAsync(userLogin, rightId, isAdding: false, cancellationToken);
+                Logger?.Warn($"No permissions to add for user {userLogin}");
+                return;
+            }
+
+            try
+            {
+                if (!await CanModifyUserAsync(userLogin, cancellationToken))
+                    return;
+
+                var permissionsList = rightIds.ToList();
+                Logger?.Debug($"Adding {permissionsList.Count} permissions to user {userLogin}");
+
+                foreach (var rightId in permissionsList)
+                {
+                    await ModifyUserPermissionAsync(userLogin, rightId, isAdding: true, cancellationToken);
+                }
+
+                Logger?.Debug($"Successfully added {permissionsList.Count} permissions to user {userLogin}");
+            }
+            catch (ApiException ex)
+            {
+                Logger?.Error($"Failed to add permissions for user {userLogin}: {ex.ErrorText}");
+                throw;
+            }
+        }
+
+
+        public async Task RemoveUserPermissionsAsync(string userLogin, IEnumerable<string> rightIds,
+            CancellationToken cancellationToken = default)
+        {
+            EnsureInitialized();
+            ValidateUserLogin(userLogin);
+
+            if (rightIds == null || !rightIds.Any())
+            {
+                Logger?.Warn($"No permissions to remove for user {userLogin}");
+                return;
+            }
+
+            try
+            {
+                if (!await CanModifyUserAsync(userLogin, cancellationToken))
+                    return;
+
+                var permissionsList = rightIds.ToList();
+                Logger?.Debug($"Removing {permissionsList.Count} permissions from user {userLogin}");
+
+                foreach (var rightId in permissionsList)
+                {
+                    await ModifyUserPermissionAsync(userLogin, rightId, isAdding: false, cancellationToken);
+                }
+
+                Logger?.Debug($"Successfully removed {permissionsList.Count} permissions from user {userLogin}");
+            }
+            catch (ApiException ex)
+            {
+                Logger?.Error($"Failed to remove permissions for user {userLogin}: {ex.ErrorText}");
+                throw;
             }
         }
 
         private async Task<bool> CanModifyUserAsync(string userLogin, CancellationToken cancellationToken)
         {
-            var userResponse = await _apiClient.GetAsync<UserPropertyResponse>(
-                string.Format(Constants.ApiUserById, userLogin),
-                cancellationToken);
-
-            if (userResponse?.data == null)
+            try
             {
-                Logger?.Error($"Пользователь {userLogin} не найден.");
+                var userResponse = await _apiClient.GetAsync<UserPropertyResponse>(
+                    string.Format(Constants.ApiUserById, userLogin),
+                    cancellationToken);
+
+                if (userResponse?.data == null)
+                {
+                    Logger?.Error($"Пользователь {userLogin} не найден.");
+                    return false;
+                }
+
+                if (userResponse.data.status == Constants.UserStatusLock)
+                {
+                    Logger?.Error($"Пользователь {userLogin} заблокирован.");
+                    return false;
+                }
+
+                return true;
+            }
+            catch (ApiException ex)
+            {
+                Logger?.Error($"Failed to check user status for {userLogin}: {ex.ErrorText}");
                 return false;
             }
-
-            if (userResponse.data.status == Constants.UserStatusLock)
-            {
-                Logger?.Error($"Пользователь {userLogin} заблокирован.");
-                return false;
-            }
-
-            return true;
         }
 
-        private async Task ModifyUserPermissionAsync(string userLogin, string rightId, bool isAdding, CancellationToken cancellationToken)
+        private async Task ModifyUserPermissionAsync(string userLogin, string rightId, bool isAdding,
+            CancellationToken cancellationToken)
         {
             var parts = rightId.Split(',');
             if (parts.Length != 2)
@@ -219,79 +296,112 @@ namespace TR.Connector
                 new Property(Constants.PropertyIsLead, Constants.PropertyIsLead)
             };
 
+            Logger?.Debug($"Retrieved {properties.Count} property definitions");
             return Task.FromResult<IEnumerable<Property>>(properties);
         }
 
-        public async Task<IEnumerable<UserProperty>> GetUserPropertiesAsync(string userLogin, CancellationToken cancellationToken = default)
+        public async Task<IEnumerable<UserProperty>> GetUserPropertiesAsync(string userLogin,
+            CancellationToken cancellationToken = default)
         {
             EnsureInitialized();
             ValidateUserLogin(userLogin);
 
-            var userResponse = await _apiClient.GetAsync<UserPropertyResponse>(
-                string.Format(Constants.ApiUserById, userLogin),
-                cancellationToken);
-
-            if (userResponse?.data == null)
-                throw new InvalidOperationException($"Пользователь {userLogin} не найден");
-
-            if (userResponse.data.status == Constants.UserStatusLock)
-                throw new InvalidOperationException($"Невозможно получить свойства, пользователь {userLogin} заблокирован");
-
-            var user = userResponse.data;
-            return new List<UserProperty>
+            try
             {
-                new UserProperty(Constants.PropertyLastName, user.lastName ?? string.Empty),
-                new UserProperty(Constants.PropertyFirstName, user.firstName ?? string.Empty),
-                new UserProperty(Constants.PropertyMiddleName, user.middleName ?? string.Empty),
-                new UserProperty(Constants.PropertyTelephoneNumber, user.telephoneNumber ?? string.Empty),
-                new UserProperty(Constants.PropertyIsLead, user.isLead.ToString())
-            };
+                var userResponse = await _apiClient.GetAsync<UserPropertyResponse>(
+                    string.Format(Constants.ApiUserById, userLogin),
+                    cancellationToken);
+
+                if (userResponse?.data == null)
+                    throw new InvalidOperationException($"Пользователь {userLogin} не найден");
+
+                if (userResponse.data.status == Constants.UserStatusLock)
+                    throw new InvalidOperationException(
+                        $"Невозможно получить свойства, пользователь {userLogin} заблокирован");
+
+                var user = userResponse.data;
+                var properties = new List<UserProperty>
+                {
+                    new UserProperty(Constants.PropertyLastName, user.lastName ?? string.Empty),
+                    new UserProperty(Constants.PropertyFirstName, user.firstName ?? string.Empty),
+                    new UserProperty(Constants.PropertyMiddleName, user.middleName ?? string.Empty),
+                    new UserProperty(Constants.PropertyTelephoneNumber, user.telephoneNumber ?? string.Empty),
+                    new UserProperty(Constants.PropertyIsLead, user.isLead.ToString())
+                };
+
+                Logger?.Debug($"Retrieved {properties.Count} properties for user {userLogin}");
+                return properties;
+            }
+            catch (ApiException ex)
+            {
+                Logger?.Error($"Failed to get properties for user {userLogin}: {ex.ErrorText}");
+                throw;
+            }
         }
 
-        public async Task UpdateUserPropertiesAsync(IEnumerable<UserProperty> properties, string userLogin, CancellationToken cancellationToken = default)
+        public async Task UpdateUserPropertiesAsync(IEnumerable<UserProperty> properties, string userLogin,
+            CancellationToken cancellationToken = default)
         {
             EnsureInitialized();
             ValidateUserLogin(userLogin);
 
             if (properties == null || !properties.Any())
-                return;
-
-            var userResponse = await _apiClient.GetAsync<UserPropertyResponse>(
-                string.Format(Constants.ApiUserById, userLogin),
-                cancellationToken);
-
-            if (userResponse?.data == null)
-                throw new InvalidOperationException($"Пользователь {userLogin} не найден");
-
-            if (userResponse.data.status == Constants.UserStatusLock)
-                throw new InvalidOperationException($"Невозможно обновить свойства, пользователь {userLogin} заблокирован");
-
-            var user = userResponse.data;
-
-            foreach (var property in properties)
             {
-                switch (property.Name.ToLowerInvariant())
-                {
-                    case var name when name.Equals(Constants.PropertyLastName, StringComparison.OrdinalIgnoreCase):
-                        user.lastName = property.Value;
-                        break;
-                    case var name when name.Equals(Constants.PropertyFirstName, StringComparison.OrdinalIgnoreCase):
-                        user.firstName = property.Value;
-                        break;
-                    case var name when name.Equals(Constants.PropertyMiddleName, StringComparison.OrdinalIgnoreCase):
-                        user.middleName = property.Value;
-                        break;
-                    case var name when name.Equals(Constants.PropertyTelephoneNumber, StringComparison.OrdinalIgnoreCase):
-                        user.telephoneNumber = property.Value;
-                        break;
-                    case var name when name.Equals(Constants.PropertyIsLead, StringComparison.OrdinalIgnoreCase):
-                        if (bool.TryParse(property.Value, out bool isLeadValue))
-                            user.isLead = isLeadValue;
-                        break;
-                }
+                Logger?.Warn($"No properties to update for user {userLogin}");
+                return;
             }
 
-            await _apiClient.PutAsync(Constants.ApiUsersEdit, user, cancellationToken);
+            try
+            {
+                var userResponse = await _apiClient.GetAsync<UserPropertyResponse>(
+                    string.Format(Constants.ApiUserById, userLogin),
+                    cancellationToken);
+
+                if (userResponse?.data == null)
+                    throw new InvalidOperationException($"Пользователь {userLogin} не найден");
+
+                if (userResponse.data.status == Constants.UserStatusLock)
+                    throw new InvalidOperationException(
+                        $"Невозможно обновить свойства, пользователь {userLogin} заблокирован");
+
+                var user = userResponse.data;
+                var propertyList = properties.ToList();
+
+                Logger?.Debug($"Updating {propertyList.Count} properties for user {userLogin}");
+
+                foreach (var property in propertyList)
+                {
+                    switch (property.Name.ToLowerInvariant())
+                    {
+                        case var name when name.Equals(Constants.PropertyLastName, StringComparison.OrdinalIgnoreCase):
+                            user.lastName = property.Value;
+                            break;
+                        case var name when name.Equals(Constants.PropertyFirstName, StringComparison.OrdinalIgnoreCase):
+                            user.firstName = property.Value;
+                            break;
+                        case var name
+                            when name.Equals(Constants.PropertyMiddleName, StringComparison.OrdinalIgnoreCase):
+                            user.middleName = property.Value;
+                            break;
+                        case var name when name.Equals(Constants.PropertyTelephoneNumber,
+                            StringComparison.OrdinalIgnoreCase):
+                            user.telephoneNumber = property.Value;
+                            break;
+                        case var name when name.Equals(Constants.PropertyIsLead, StringComparison.OrdinalIgnoreCase):
+                            if (bool.TryParse(property.Value, out bool isLeadValue))
+                                user.isLead = isLeadValue;
+                            break;
+                    }
+                }
+
+                await _apiClient.PutAsync(Constants.ApiUsersEdit, user, cancellationToken);
+                Logger?.Debug($"Successfully updated properties for user {userLogin}");
+            }
+            catch (ApiException ex)
+            {
+                Logger?.Error($"Failed to update properties for user {userLogin}: {ex.ErrorText}");
+                throw;
+            }
         }
 
         public async Task<bool> IsUserExistsAsync(string userLogin, CancellationToken cancellationToken = default)
@@ -305,10 +415,18 @@ namespace TR.Connector
                     string.Format(Constants.ApiUserById, userLogin),
                     cancellationToken);
 
-                return userResponse?.data != null;
+                var exists = userResponse?.data != null;
+                Logger?.Debug($"User {userLogin} exists: {exists}");
+                return exists;
             }
-            catch
+            catch (ApiException ex)
             {
+                Logger?.Warn($"User {userLogin} does not exist: {ex.ErrorText}");
+                return false;
+            }
+            catch (Exception ex)
+            {
+                Logger?.Error($"Error checking if user {userLogin} exists: {ex.Message}");
                 return false;
             }
         }
@@ -320,24 +438,35 @@ namespace TR.Connector
             if (user == null)
                 throw new ArgumentNullException(nameof(user));
 
-            var newUser = new CreateUserDTO
+            try
             {
-                login = user.Login,
-                password = user.HashPassword,
-                lastName = GetPropertyValue(user.Properties, Constants.PropertyLastName),
-                firstName = GetPropertyValue(user.Properties, Constants.PropertyFirstName),
-                middleName = GetPropertyValue(user.Properties, Constants.PropertyMiddleName),
-                telephoneNumber = GetPropertyValue(user.Properties, Constants.PropertyTelephoneNumber),
-                isLead = bool.TryParse(GetPropertyValue(user.Properties, Constants.PropertyIsLead), out bool isLeadValue) && isLeadValue,
-                status = string.Empty
-            };
+                var newUser = new CreateUserDTO
+                {
+                    login = user.Login,
+                    password = user.HashPassword,
+                    lastName = GetPropertyValue(user.Properties, Constants.PropertyLastName),
+                    firstName = GetPropertyValue(user.Properties, Constants.PropertyFirstName),
+                    middleName = GetPropertyValue(user.Properties, Constants.PropertyMiddleName),
+                    telephoneNumber = GetPropertyValue(user.Properties, Constants.PropertyTelephoneNumber),
+                    isLead = bool.TryParse(GetPropertyValue(user.Properties, Constants.PropertyIsLead),
+                        out bool isLeadValue) && isLeadValue,
+                    status = string.Empty
+                };
 
-            await _apiClient.PostAsync(Constants.ApiUsersCreate, newUser, cancellationToken);
+                Logger?.Debug($"Creating user {user.Login}");
+                await _apiClient.PostAsync(Constants.ApiUsersCreate, newUser, cancellationToken);
+                Logger?.Debug($"Successfully created user {user.Login}");
+            }
+            catch (ApiException ex)
+            {
+                Logger?.Error($"Failed to create user {user.Login}: {ex.ErrorText}");
+                throw;
+            }
         }
 
         private static string GetPropertyValue(IEnumerable<UserProperty> properties, string propertyName)
         {
-            return properties?.FirstOrDefault(p => 
+            return properties.FirstOrDefault(p =>
                 p.Name.Equals(propertyName, StringComparison.OrdinalIgnoreCase))?.Value ?? string.Empty;
         }
 

@@ -2,11 +2,7 @@
 
 namespace TR.Connector.Models.Responses
 {
-    internal class UserPropertyResponse
+    internal class UserPropertyResponse : BaseApiResponse<UserPropertyData>
     {
-        public UserPropertyData data { get; set; }
-        public bool success { get; set; }
-        public object errorText { get; set; }
-        public int count { get; set; }
     }
 }

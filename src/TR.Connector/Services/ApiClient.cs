@@ -1,6 +1,8 @@
 ﻿using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using TR.Connector.Exceptions;
+using TR.Connector.Models.Responses;
 
 namespace TR.Connector.Services
 {
@@ -28,7 +30,8 @@ namespace TR.Connector.Services
             _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
         }
 
-        public async Task<T> GetAsync<T>(string endpoint, CancellationToken cancellationToken = default)
+        public async Task<T> GetAsync<T>(string endpoint, CancellationToken cancellationToken = default) 
+            where T : BaseApiResponse
         {
             if (string.IsNullOrWhiteSpace(endpoint))
                 throw new ArgumentException("Endpoint cannot be null or empty", nameof(endpoint));
@@ -37,11 +40,15 @@ namespace TR.Connector.Services
             response.EnsureSuccessStatusCode();
             
             var content = await response.Content.ReadAsStringAsync(cancellationToken);
-            return JsonSerializer.Deserialize<T>(content) 
+            var result = JsonSerializer.Deserialize<T>(content) 
                 ?? throw new InvalidOperationException($"Failed to deserialize response from {endpoint}");
+
+            ValidateApiResponse(result, endpoint);
+            return result;
         }
 
-        public async Task<T> PostAsync<T>(string endpoint, object body, CancellationToken cancellationToken = default)
+        public async Task<T> PostAsync<T>(string endpoint, object body, CancellationToken cancellationToken = default) 
+            where T : BaseApiResponse
         {
             if (string.IsNullOrWhiteSpace(endpoint))
                 throw new ArgumentException("Endpoint cannot be null or empty", nameof(endpoint));
@@ -55,8 +62,11 @@ namespace TR.Connector.Services
             response.EnsureSuccessStatusCode();
             
             var content = await response.Content.ReadAsStringAsync(cancellationToken);
-            return JsonSerializer.Deserialize<T>(content)
+            var result = JsonSerializer.Deserialize<T>(content)
                 ?? throw new InvalidOperationException($"Failed to deserialize response from {endpoint}");
+
+            ValidateApiResponse(result, endpoint);
+            return result;
         }
 
         public async Task PostAsync(string endpoint, object body, CancellationToken cancellationToken = default)
@@ -71,6 +81,12 @@ namespace TR.Connector.Services
 
             var response = await _httpClient.PostAsync(endpoint, jsonContent, cancellationToken);
             response.EnsureSuccessStatusCode();
+
+            var content = await response.Content.ReadAsStringAsync(cancellationToken);
+            var result = JsonSerializer.Deserialize<BaseApiResponse>(content);
+            
+            if (result != null)
+                ValidateApiResponse(result, endpoint);
         }
 
         public async Task PutAsync(string endpoint, object? body = null, CancellationToken cancellationToken = default)
@@ -89,6 +105,12 @@ namespace TR.Connector.Services
 
             var response = await _httpClient.PutAsync(endpoint, jsonContent, cancellationToken);
             response.EnsureSuccessStatusCode();
+
+            var content = await response.Content.ReadAsStringAsync(cancellationToken);
+            var result = JsonSerializer.Deserialize<BaseApiResponse>(content);
+            
+            if (result != null)
+                ValidateApiResponse(result, endpoint);
         }
 
         public async Task DeleteAsync(string endpoint, CancellationToken cancellationToken = default)
@@ -98,6 +120,20 @@ namespace TR.Connector.Services
 
             var response = await _httpClient.DeleteAsync(endpoint, cancellationToken);
             response.EnsureSuccessStatusCode();
+
+            var content = await response.Content.ReadAsStringAsync(cancellationToken);
+            var result = JsonSerializer.Deserialize<BaseApiResponse>(content);
+            
+            if (result != null)
+                ValidateApiResponse(result, endpoint);
+        }
+
+        private static void ValidateApiResponse(BaseApiResponse response, string endpoint)
+        {
+            if (!response.success)
+            {
+                throw new ApiException(response.errorText, endpoint);
+            }
         }
 
         public void Dispose()

@@ -6,11 +6,7 @@
         public string status { get; set; }
     }
 
-    internal class UserResponse
+    internal class UserResponse : BaseApiResponse<List<UserResponseData>>
     {
-        public List<UserResponseData> data { get; set; }
-        public bool success { get; set; }
-        public object errorText { get; set; }
-        public int count { get; set; }
     }
 }
