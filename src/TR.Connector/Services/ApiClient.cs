@@ -33,10 +33,63 @@ namespace TR.Connector.Services
         public async Task<T> GetAsync<T>(string endpoint, CancellationToken cancellationToken = default) 
             where T : BaseApiResponse
         {
+            ValidateEndpoint(endpoint);
+            var response = await _httpClient.GetAsync(endpoint, cancellationToken);
+            return await ProcessResponseAsync<T>(response, endpoint, cancellationToken);
+        }
+
+        public async Task<T> PostAsync<T>(string endpoint, object body, CancellationToken cancellationToken = default) 
+            where T : BaseApiResponse
+        {
+            ValidateEndpoint(endpoint);
+            var jsonContent = CreateJsonContent(body);
+            var response = await _httpClient.PostAsync(endpoint, jsonContent, cancellationToken);
+            return await ProcessResponseAsync<T>(response, endpoint, cancellationToken);
+        }
+
+        public async Task PostAsync(string endpoint, object body, CancellationToken cancellationToken = default)
+        {
+            ValidateEndpoint(endpoint);
+            var jsonContent = CreateJsonContent(body);
+            var response = await _httpClient.PostAsync(endpoint, jsonContent, cancellationToken);
+            await ProcessResponseAsync(response, endpoint, cancellationToken);
+        }
+
+        public async Task PutAsync(string endpoint, object? body = null, CancellationToken cancellationToken = default)
+        {
+            ValidateEndpoint(endpoint);
+            var jsonContent = body != null ? CreateJsonContent(body) : null;
+            var response = await _httpClient.PutAsync(endpoint, jsonContent, cancellationToken);
+            await ProcessResponseAsync(response, endpoint, cancellationToken);
+        }
+
+        public async Task DeleteAsync(string endpoint, CancellationToken cancellationToken = default)
+        {
+            ValidateEndpoint(endpoint);
+            var response = await _httpClient.DeleteAsync(endpoint, cancellationToken);
+            await ProcessResponseAsync(response, endpoint, cancellationToken);
+        }
+
+        private static void ValidateEndpoint(string endpoint)
+        {
             if (string.IsNullOrWhiteSpace(endpoint))
                 throw new ArgumentException("Endpoint cannot be null or empty", nameof(endpoint));
+        }
 
-            var response = await _httpClient.GetAsync(endpoint, cancellationToken);
+        private static StringContent CreateJsonContent(object body)
+        {
+            return new StringContent(
+                JsonSerializer.Serialize(body),
+                Encoding.UTF8,
+                "application/json");
+        }
+
+        private async Task<T> ProcessResponseAsync<T>(
+            HttpResponseMessage response, 
+            string endpoint, 
+            CancellationToken cancellationToken) 
+            where T : BaseApiResponse
+        {
             response.EnsureSuccessStatusCode();
             
             var content = await response.Content.ReadAsStringAsync(cancellationToken);
@@ -47,78 +100,11 @@ namespace TR.Connector.Services
             return result;
         }
 
-        public async Task<T> PostAsync<T>(string endpoint, object body, CancellationToken cancellationToken = default) 
-            where T : BaseApiResponse
+        private async Task ProcessResponseAsync(
+            HttpResponseMessage response, 
+            string endpoint, 
+            CancellationToken cancellationToken)
         {
-            if (string.IsNullOrWhiteSpace(endpoint))
-                throw new ArgumentException("Endpoint cannot be null or empty", nameof(endpoint));
-
-            var jsonContent = new StringContent(
-                JsonSerializer.Serialize(body),
-                Encoding.UTF8,
-                "application/json");
-
-            var response = await _httpClient.PostAsync(endpoint, jsonContent, cancellationToken);
-            response.EnsureSuccessStatusCode();
-            
-            var content = await response.Content.ReadAsStringAsync(cancellationToken);
-            var result = JsonSerializer.Deserialize<T>(content)
-                ?? throw new InvalidOperationException($"Failed to deserialize response from {endpoint}");
-
-            ValidateApiResponse(result, endpoint);
-            return result;
-        }
-
-        public async Task PostAsync(string endpoint, object body, CancellationToken cancellationToken = default)
-        {
-            if (string.IsNullOrWhiteSpace(endpoint))
-                throw new ArgumentException("Endpoint cannot be null or empty", nameof(endpoint));
-
-            var jsonContent = new StringContent(
-                JsonSerializer.Serialize(body),
-                Encoding.UTF8,
-                "application/json");
-
-            var response = await _httpClient.PostAsync(endpoint, jsonContent, cancellationToken);
-            response.EnsureSuccessStatusCode();
-
-            var content = await response.Content.ReadAsStringAsync(cancellationToken);
-            var result = JsonSerializer.Deserialize<BaseApiResponse>(content);
-            
-            if (result != null)
-                ValidateApiResponse(result, endpoint);
-        }
-
-        public async Task PutAsync(string endpoint, object? body = null, CancellationToken cancellationToken = default)
-        {
-            if (string.IsNullOrWhiteSpace(endpoint))
-                throw new ArgumentException("Endpoint cannot be null or empty", nameof(endpoint));
-
-            StringContent? jsonContent = null;
-            if (body != null)
-            {
-                jsonContent = new StringContent(
-                    JsonSerializer.Serialize(body),
-                    Encoding.UTF8,
-                    "application/json");
-            }
-
-            var response = await _httpClient.PutAsync(endpoint, jsonContent, cancellationToken);
-            response.EnsureSuccessStatusCode();
-
-            var content = await response.Content.ReadAsStringAsync(cancellationToken);
-            var result = JsonSerializer.Deserialize<BaseApiResponse>(content);
-            
-            if (result != null)
-                ValidateApiResponse(result, endpoint);
-        }
-
-        public async Task DeleteAsync(string endpoint, CancellationToken cancellationToken = default)
-        {
-            if (string.IsNullOrWhiteSpace(endpoint))
-                throw new ArgumentException("Endpoint cannot be null or empty", nameof(endpoint));
-
-            var response = await _httpClient.DeleteAsync(endpoint, cancellationToken);
             response.EnsureSuccessStatusCode();
 
             var content = await response.Content.ReadAsStringAsync(cancellationToken);

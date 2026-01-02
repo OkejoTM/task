@@ -33,7 +33,7 @@ namespace TR.Connector
             if (string.IsNullOrWhiteSpace(connectionString))
                 throw new ArgumentException("Connection string cannot be null or empty", nameof(connectionString));
 
-            Logger?.Debug("Строка подключения: " + connectionString);
+            Logger?.Debug("Connection string: " + connectionString);
 
             _connectorConfig = ParseConnectionString(connectionString);
 
@@ -392,13 +392,13 @@ namespace TR.Connector
 
                 if (userResponse?.data == null)
                 {
-                    Logger?.Error($"Пользователь {userLogin} не найден");
+                    Logger?.Error($"User {userLogin} is not found");
                     return null;
                 }
 
                 if (userResponse.data.status == Constants.UserStatusLock)
                 {
-                    Logger?.Error($"Пользователь {userLogin} заблокирован");
+                    Logger?.Error($"User {userLogin} is locked");
                     return null;
                 }
 
