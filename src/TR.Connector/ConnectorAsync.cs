@@ -1,4 +1,5 @@
-﻿using TR.Connector.Configs;
+﻿using System.Reflection;
+using TR.Connector.Configs;
 using TR.Connector.Exceptions;
 using TR.Connectors.Api.Entities;
 using TR.Connectors.Api.Interfaces;
@@ -16,6 +17,7 @@ namespace TR.Connector
         private ConnectionConfig _connectorConfig;
         private ApiClient _apiClient;
         private bool _disposed;
+
         private static readonly Dictionary<string, Action<UserPropertyData, string>> PropertySetters = 
             new(StringComparer.OrdinalIgnoreCase)
             {
@@ -30,6 +32,12 @@ namespace TR.Connector
                 }
             };
 
+        private static readonly PropertyInfo[] AllUserProperties = 
+            typeof(UserPropertyData).GetProperties();
+        
+        private static readonly PropertyInfo[] UserPropertiesWithoutLogin = 
+            AllUserProperties.Where(p => p.Name != "login").ToArray();
+        
         public ConnectorAsync()
         {
         }
@@ -71,7 +79,7 @@ namespace TR.Connector
             }
         }
 
-        private ConnectionConfig ParseConnectionString(string connectionString)
+        private static ConnectionConfig ParseConnectionString(string connectionString)
         {
             string? url = null;
             string? login = null;
@@ -222,7 +230,8 @@ namespace TR.Connector
             EnsureInitialized();
             ValidateUserLogin(userLogin);
 
-            if (rightIds == null || !rightIds.Any())
+            var rightIdsList = rightIds.ToList();
+            if (rightIdsList.Count == 0)
             {
                 Logger?.Warn($"No permissions to remove for user {userLogin}");
                 return;
@@ -233,15 +242,14 @@ namespace TR.Connector
                 if (!await CanModifyUserAsync(userLogin, cancellationToken))
                     return;
 
-                var permissionsList = rightIds.ToList();
-                Logger?.Debug($"Removing {permissionsList.Count} permissions from user {userLogin}");
+                Logger?.Debug($"Removing {rightIdsList.Count} permissions from user {userLogin}");
 
-                foreach (var rightId in permissionsList)
+                foreach (var rightId in rightIdsList)
                 {
                     await ModifyUserPermissionAsync(userLogin, rightId, isAdding: false, cancellationToken);
                 }
 
-                Logger?.Debug($"Successfully removed {permissionsList.Count} permissions from user {userLogin}");
+                Logger?.Debug($"Successfully removed {rightIdsList.Count} permissions from user {userLogin}");
             }
             catch (ApiException ex)
             {
@@ -250,66 +258,13 @@ namespace TR.Connector
             }
         }
 
-        private async Task<bool> CanModifyUserAsync(string userLogin, CancellationToken cancellationToken)
-        {
-            try
-            {
-                var userResponse = await _apiClient.GetAsync<UserPropertyResponse>(
-                    string.Format(Constants.ApiUserById, userLogin),
-                    cancellationToken);
-
-                if (userResponse?.data == null)
-                {
-                    Logger?.Error($"Пользователь {userLogin} не найден.");
-                    return false;
-                }
-
-                if (userResponse.data.status == Constants.UserStatusLock)
-                {
-                    Logger?.Error($"Пользователь {userLogin} заблокирован.");
-                    return false;
-                }
-
-                return true;
-            }
-            catch (ApiException ex)
-            {
-                Logger?.Error($"Failed to check user status for {userLogin}: {ex.ErrorText}");
-                return false;
-            }
-        }
-
-        private async Task ModifyUserPermissionAsync(string userLogin, string rightId, bool isAdding,
-            CancellationToken cancellationToken)
-        {
-            var parts = rightId.Split(',');
-            if (parts.Length != 2)
-                throw new ArgumentException($"Invalid permission format: {rightId}", nameof(rightId));
-
-            var permissionType = parts[0];
-            var permissionId = parts[1];
-
-            var endpoint = PermissionEndpoints.GetEndpoint(permissionType, userLogin, permissionId, isAdding);
-
-            if (isAdding)
-                await _apiClient.PutAsync(endpoint, cancellationToken: cancellationToken);
-            else
-                await _apiClient.DeleteAsync(endpoint, cancellationToken);
-        }
-
         public Task<IEnumerable<Property>> GetAllPropertiesAsync(CancellationToken cancellationToken = default)
         {
-            var properties = new List<Property>
-            {
-                new Property(Constants.PropertyLastName, Constants.PropertyLastName),
-                new Property(Constants.PropertyFirstName, Constants.PropertyFirstName),
-                new Property(Constants.PropertyMiddleName, Constants.PropertyMiddleName),
-                new Property(Constants.PropertyTelephoneNumber, Constants.PropertyTelephoneNumber),
-                new Property(Constants.PropertyIsLead, Constants.PropertyIsLead)
-            };
+            var props = UserPropertiesWithoutLogin
+                .Select(p => new Property(p.Name, p.Name))
+                .ToList();
 
-            Logger?.Debug($"Retrieved {properties.Count} property definitions");
-            return Task.FromResult<IEnumerable<Property>>(properties);
+            return Task.FromResult<IEnumerable<Property>>(props);
         }
 
         public async Task<IEnumerable<UserProperty>> GetUserPropertiesAsync(string userLogin,
@@ -320,29 +275,10 @@ namespace TR.Connector
 
             try
             {
-                var userResponse = await _apiClient.GetAsync<UserPropertyResponse>(
-                    string.Format(Constants.ApiUserById, userLogin),
-                    cancellationToken);
+                var user = await GetAndValidateUserAsync(userLogin, cancellationToken);
 
-                if (userResponse?.data == null)
-                    throw new InvalidOperationException($"Пользователь {userLogin} не найден");
-
-                if (userResponse.data.status == Constants.UserStatusLock)
-                    throw new InvalidOperationException(
-                        $"Невозможно получить свойства, пользователь {userLogin} заблокирован");
-
-                var user = userResponse.data;
-                var properties = new List<UserProperty>
-                {
-                    new UserProperty(Constants.PropertyLastName, user.lastName ?? string.Empty),
-                    new UserProperty(Constants.PropertyFirstName, user.firstName ?? string.Empty),
-                    new UserProperty(Constants.PropertyMiddleName, user.middleName ?? string.Empty),
-                    new UserProperty(Constants.PropertyTelephoneNumber, user.telephoneNumber ?? string.Empty),
-                    new UserProperty(Constants.PropertyIsLead, user.isLead.ToString())
-                };
-
-                Logger?.Debug($"Retrieved {properties.Count} properties for user {userLogin}");
-                return properties;
+                return AllUserProperties
+                    .Select(p => new UserProperty(p.Name, p.GetValue(user)?.ToString() ?? string.Empty));
             }
             catch (ApiException ex)
             {
@@ -357,7 +293,8 @@ namespace TR.Connector
             EnsureInitialized();
             ValidateUserLogin(userLogin);
 
-            if (properties == null || !properties.Any())
+            var userProperties = properties.ToList();
+            if (userProperties.Count == 0)
             {
                 Logger?.Warn($"No properties to update for user {userLogin}");
                 return;
@@ -365,23 +302,11 @@ namespace TR.Connector
 
             try
             {
-                var userResponse = await _apiClient.GetAsync<UserPropertyResponse>(
-                    string.Format(Constants.ApiUserById, userLogin),
-                    cancellationToken);
+                var user = await GetAndValidateUserAsync(userLogin, cancellationToken);
 
-                if (userResponse?.data == null)
-                    throw new InvalidOperationException($"Пользователь {userLogin} не найден");
+                Logger?.Debug($"Updating {userProperties.Count} properties for user {userLogin}");
 
-                if (userResponse.data.status == Constants.UserStatusLock)
-                    throw new InvalidOperationException(
-                        $"Невозможно обновить свойства, пользователь {userLogin} заблокирован");
-
-                var user = userResponse.data;
-                var propertyList = properties.ToList();
-
-                Logger?.Debug($"Updating {propertyList.Count} properties for user {userLogin}");
-
-                foreach (var property in propertyList)
+                foreach (var property in userProperties)
                 {
                     if (PropertySetters.TryGetValue(property.Name, out var setter))
                     {
@@ -421,13 +346,12 @@ namespace TR.Connector
             catch (ApiException ex)
             {
                 Logger?.Warn($"User {userLogin} does not exist: {ex.ErrorText}");
-                return false;
             }
             catch (Exception ex)
             {
                 Logger?.Error($"Error checking if user {userLogin} exists: {ex.Message}");
-                return false;
             }
+            return false;
         }
 
         public async Task CreateUserAsync(UserToCreate user, CancellationToken cancellationToken = default)
@@ -463,6 +387,72 @@ namespace TR.Connector
             }
         }
 
+        private async Task<UserPropertyData?> TryGetValidUserAsync(
+            string userLogin,
+            CancellationToken cancellationToken = default)
+        {
+            try
+            {
+                var userResponse = await _apiClient.GetAsync<UserPropertyResponse>(
+                    string.Format(Constants.ApiUserById, userLogin),
+                    cancellationToken).ConfigureAwait(false);
+
+                if (userResponse?.data == null)
+                {
+                    Logger?.Error($"Пользователь {userLogin} не найден");
+                    return null;
+                }
+
+                if (userResponse.data.status == Constants.UserStatusLock)
+                {
+                    Logger?.Error($"Пользователь {userLogin} заблокирован");
+                    return null;
+                }
+
+                return userResponse.data;
+            }
+            catch (ApiException ex)
+            {
+                Logger?.Error($"Failed to get user {userLogin}: {ex.ErrorText}");
+                return null;
+            }
+        }
+        
+        private async Task<UserPropertyData> GetAndValidateUserAsync(
+            string userLogin,
+            CancellationToken cancellationToken = default)
+        {
+            var user = await TryGetValidUserAsync(userLogin, cancellationToken);
+    
+            if (user == null)
+                throw new InvalidOperationException($"User {userLogin} us not found or locked");
+    
+            return user;
+        }
+
+        private async Task<bool> CanModifyUserAsync(string userLogin, CancellationToken cancellationToken)
+        {
+            return await TryGetValidUserAsync(userLogin, cancellationToken) != null;
+        }
+
+        private async Task ModifyUserPermissionAsync(string userLogin, string rightId, bool isAdding,
+            CancellationToken cancellationToken)
+        {
+            var parts = rightId.Split(',');
+            if (parts.Length != 2)
+                throw new ArgumentException($"Invalid permission format: {rightId}", nameof(rightId));
+
+            var permissionType = parts[0];
+            var permissionId = parts[1];
+
+            var endpoint = PermissionEndpoints.GetEndpoint(permissionType, userLogin, permissionId, isAdding);
+
+            if (isAdding)
+                await _apiClient.PutAsync(endpoint, cancellationToken: cancellationToken);
+            else
+                await _apiClient.DeleteAsync(endpoint, cancellationToken);
+        }
+        
         private static string GetPropertyValue(IEnumerable<UserProperty> properties, string propertyName)
         {
             return properties.FirstOrDefault(p =>
