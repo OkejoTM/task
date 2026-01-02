@@ -1,4 +1,5 @@
-﻿using TR.Connector.Exceptions;
+﻿using TR.Connector.Configs;
+using TR.Connector.Exceptions;
 using TR.Connectors.Api.Entities;
 using TR.Connectors.Api.Interfaces;
 using TR.Connector.Interfaces;
@@ -12,9 +13,7 @@ namespace TR.Connector
     {
         public ILogger Logger { get; set; }
 
-        private string _url = string.Empty;
-        private string _login = string.Empty;
-        private string _password = string.Empty;
+        private ConnectionConfig _connectorConfig;
         private ApiClient _apiClient;
         private bool _disposed;
         private static readonly Dictionary<string, Action<UserPropertyData, string>> PropertySetters = 
@@ -42,13 +41,18 @@ namespace TR.Connector
 
             Logger?.Debug("Строка подключения: " + connectionString);
 
-            ParseConnectionString(connectionString);
+            _connectorConfig = ParseConnectionString(connectionString);
 
-            _apiClient = new ApiClient(_url);
+            _apiClient = new ApiClient(_connectorConfig.Url);
 
             try
             {
-                var body = new { login = _login, password = _password };
+                var body = new
+                {
+                    login = _connectorConfig.Login,
+                    password = _connectorConfig.Password
+                };
+
                 var tokenResponse = await _apiClient.PostAsync<TokenResponse>(
                     Constants.ApiLogin,
                     body,
@@ -67,8 +71,12 @@ namespace TR.Connector
             }
         }
 
-        private void ParseConnectionString(string connectionString)
+        private ConnectionConfig ParseConnectionString(string connectionString)
         {
+            string? url = null;
+            string? login = null;
+            string? password = null;
+
             foreach (var item in connectionString.Split(';'))
             {
                 if (string.IsNullOrWhiteSpace(item)) continue;
@@ -82,23 +90,23 @@ namespace TR.Connector
                 switch (key.ToLowerInvariant())
                 {
                     case Constants.ConnectionStringKeyUrl:
-                        _url = value;
+                        url = value;
                         break;
                     case Constants.ConnectionStringKeyLogin:
-                        _login = value;
+                        login = value;
                         break;
                     case Constants.ConnectionStringKeyPassword:
-                        _password = value;
+                        password = value;
                         break;
                 }
             }
 
-            if (string.IsNullOrWhiteSpace(_url))
-                throw new InvalidOperationException("URL not found in connection string");
-            if (string.IsNullOrWhiteSpace(_login))
-                throw new InvalidOperationException("Login not found in connection string");
-            if (string.IsNullOrWhiteSpace(_password))
-                throw new InvalidOperationException("Password not found in connection string");
+            return new ConnectionConfig
+            {
+                Url = url ?? throw new InvalidOperationException("URL not found in connection string"),
+                Login = login ?? throw new InvalidOperationException("Login not found in connection string"),
+                Password = password ?? throw new InvalidOperationException("Password not found in connection string")
+            };
         }
 
         public async Task<IEnumerable<Permission>> GetAllPermissionsAsync(CancellationToken cancellationToken = default)
@@ -441,7 +449,7 @@ namespace TR.Connector
                     telephoneNumber = GetPropertyValue(user.Properties, Constants.PropertyTelephoneNumber),
                     isLead = bool.TryParse(GetPropertyValue(user.Properties, Constants.PropertyIsLead),
                         out bool isLeadValue) && isLeadValue,
-                    status = string.Empty
+                    status = Constants.UserStatusUnlock
                 };
 
                 Logger?.Debug($"Creating user {user.Login}");
