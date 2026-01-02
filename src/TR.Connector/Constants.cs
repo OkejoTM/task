@@ -38,4 +38,24 @@
         public const string PropertyTelephoneNumber = "telephoneNumber";
         public const string PropertyIsLead = "isLead";
     }
+    
+    internal static class PermissionEndpoints
+    {
+        private static readonly Dictionary<(string Type, bool IsAdding), string> EndpointTemplates = new()
+        {
+            [(Constants.PermissionTypeItRole, true)] = Constants.ApiUserAddRole,
+            [(Constants.PermissionTypeItRole, false)] = Constants.ApiUserDropRole,
+            [(Constants.PermissionTypeRequestRight, true)] = Constants.ApiUserAddRight,
+            [(Constants.PermissionTypeRequestRight, false)] = Constants.ApiUserDropRight
+        };
+
+        public static string GetEndpoint(string permissionType, string userLogin, string permissionId, bool isAdding)
+        {
+            if (!EndpointTemplates.TryGetValue((permissionType, isAdding), out var template))
+                throw new ArgumentException($"Неизвестный тип прав: {permissionType}", nameof(permissionType));
+
+            return string.Format(template, userLogin, permissionId);
+        }
+    }
+
 }

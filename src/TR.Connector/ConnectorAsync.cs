@@ -17,6 +17,19 @@ namespace TR.Connector
         private string _password = string.Empty;
         private ApiClient _apiClient;
         private bool _disposed;
+        private static readonly Dictionary<string, Action<UserPropertyData, string>> PropertySetters = 
+            new(StringComparer.OrdinalIgnoreCase)
+            {
+                [Constants.PropertyLastName] = (user, value) => user.lastName = value,
+                [Constants.PropertyFirstName] = (user, value) => user.firstName = value,
+                [Constants.PropertyMiddleName] = (user, value) => user.middleName = value,
+                [Constants.PropertyTelephoneNumber] = (user, value) => user.telephoneNumber = value,
+                [Constants.PropertyIsLead] = (user, value) => 
+                {
+                    if (bool.TryParse(value, out bool isLeadValue))
+                        user.isLead = isLeadValue;
+                }
+            };
 
         public ConnectorAsync()
         {
@@ -98,7 +111,7 @@ namespace TR.Connector
                     Constants.ApiRolesAll,
                     cancellationToken);
 
-                var itRolePermissions = (itRoleResponse.data ?? new List<RoleResponseData>())
+                var itRolePermissions = (itRoleResponse.data ?? Enumerable.Empty<RoleResponseData>())
                     .Select(role => new Permission(
                         $"{Constants.PermissionTypeItRole},{role.id}",
                         role.name,
@@ -108,7 +121,7 @@ namespace TR.Connector
                     Constants.ApiRightsAll,
                     cancellationToken);
 
-                var rightPermissions = (rightResponse.data ?? new List<RoleResponseData>())
+                var rightPermissions = (rightResponse.data ?? Enumerable.Empty<RoleResponseData>())
                     .Select(right => new Permission(
                         $"{Constants.PermissionTypeRequestRight},{right.id}",
                         right.name,
@@ -138,14 +151,14 @@ namespace TR.Connector
                     string.Format(Constants.ApiUserRoles, userLogin),
                     cancellationToken);
 
-                var roles = (itRoleResponse.data ?? new List<RoleResponseData>())
+                var roles = (itRoleResponse.data ?? Enumerable.Empty<RoleResponseData>())
                     .Select(role => $"{Constants.PermissionTypeItRole},{role.id}");
 
                 var rightResponse = await _apiClient.GetAsync<UserRoleResponse>(
                     string.Format(Constants.ApiUserRights, userLogin),
                     cancellationToken);
 
-                var rights = (rightResponse.data ?? new List<RoleResponseData>())
+                var rights = (rightResponse.data ?? Enumerable.Empty<RoleResponseData>())
                     .Select(right => $"{Constants.PermissionTypeRequestRight},{right.id}");
 
                 var result = roles.Concat(rights).ToList();
@@ -268,16 +281,7 @@ namespace TR.Connector
             var permissionType = parts[0];
             var permissionId = parts[1];
 
-            var endpoint = permissionType switch
-            {
-                Constants.PermissionTypeItRole => isAdding
-                    ? string.Format(Constants.ApiUserAddRole, userLogin, permissionId)
-                    : string.Format(Constants.ApiUserDropRole, userLogin, permissionId),
-                Constants.PermissionTypeRequestRight => isAdding
-                    ? string.Format(Constants.ApiUserAddRight, userLogin, permissionId)
-                    : string.Format(Constants.ApiUserDropRight, userLogin, permissionId),
-                _ => throw new ArgumentException($"Неизвестный тип прав: {permissionType}", nameof(rightId))
-            };
+            var endpoint = PermissionEndpoints.GetEndpoint(permissionType, userLogin, permissionId, isAdding);
 
             if (isAdding)
                 await _apiClient.PutAsync(endpoint, cancellationToken: cancellationToken);
@@ -371,26 +375,13 @@ namespace TR.Connector
 
                 foreach (var property in propertyList)
                 {
-                    switch (property.Name.ToLowerInvariant())
+                    if (PropertySetters.TryGetValue(property.Name, out var setter))
                     {
-                        case var name when name.Equals(Constants.PropertyLastName, StringComparison.OrdinalIgnoreCase):
-                            user.lastName = property.Value;
-                            break;
-                        case var name when name.Equals(Constants.PropertyFirstName, StringComparison.OrdinalIgnoreCase):
-                            user.firstName = property.Value;
-                            break;
-                        case var name
-                            when name.Equals(Constants.PropertyMiddleName, StringComparison.OrdinalIgnoreCase):
-                            user.middleName = property.Value;
-                            break;
-                        case var name when name.Equals(Constants.PropertyTelephoneNumber,
-                            StringComparison.OrdinalIgnoreCase):
-                            user.telephoneNumber = property.Value;
-                            break;
-                        case var name when name.Equals(Constants.PropertyIsLead, StringComparison.OrdinalIgnoreCase):
-                            if (bool.TryParse(property.Value, out bool isLeadValue))
-                                user.isLead = isLeadValue;
-                            break;
+                        setter(user, property.Value);
+                    }
+                    else
+                    {
+                        Logger?.Warn($"Unknown property: {property.Name}");
                     }
                 }
 
@@ -440,7 +431,7 @@ namespace TR.Connector
 
             try
             {
-                var newUser = new CreateUserDTO
+                var newUser = new CreateUserDto
                 {
                     login = user.Login,
                     password = user.HashPassword,

@@ -1,6 +1,6 @@
 ﻿namespace TR.Connector.Models.DTOs
 {
-    internal class CreateUserDTO : UserPropertyData
+    internal class CreateUserDto : UserPropertyData
     {
         public string password { get; set; }
     }
