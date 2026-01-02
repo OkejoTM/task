@@ -18,20 +18,6 @@ namespace TR.Connector
         private ApiClient _apiClient;
         private bool _disposed;
 
-        private static readonly Dictionary<string, Action<UserPropertyData, string>> PropertySetters = 
-            new(StringComparer.OrdinalIgnoreCase)
-            {
-                [Constants.PropertyLastName] = (user, value) => user.lastName = value,
-                [Constants.PropertyFirstName] = (user, value) => user.firstName = value,
-                [Constants.PropertyMiddleName] = (user, value) => user.middleName = value,
-                [Constants.PropertyTelephoneNumber] = (user, value) => user.telephoneNumber = value,
-                [Constants.PropertyIsLead] = (user, value) => 
-                {
-                    if (bool.TryParse(value, out bool isLeadValue))
-                        user.isLead = isLeadValue;
-                }
-            };
-
         private static readonly PropertyInfo[] AllUserProperties = 
             typeof(UserPropertyData).GetProperties();
         
@@ -308,14 +294,21 @@ namespace TR.Connector
 
                 foreach (var property in userProperties)
                 {
-                    if (PropertySetters.TryGetValue(property.Name, out var setter))
-                    {
-                        setter(user, property.Value);
-                    }
-                    else
+                    var propertyInfo = user.GetType().GetProperty(property.Name);
+
+                    if (propertyInfo == null)
                     {
                         Logger?.Warn($"Unknown property: {property.Name}");
+                        continue;
                     }
+
+                    object valueToSet = property.Value;
+                    if (propertyInfo.PropertyType == typeof(bool) && bool.TryParse(property.Value, out bool boolValue))
+                    {
+                        valueToSet = boolValue;
+                    }
+            
+                    propertyInfo.SetValue(user, valueToSet);
                 }
 
                 await _apiClient.PutAsync(Constants.ApiUsersEdit, user, cancellationToken);
